@@ -1,0 +1,973 @@
+/*
+** Copyright (c) 2013, Cthulhu / Cthulhu@GBITnet.com.br
+** All rights reserved.
+**
+** Redistribution and use in source and binary forms, with or without
+** modification, are permitted provided that the following conditions are met:
+**
+** 1. Redistributions of source code must retain the above copyright notice, this
+**    list of conditions and the following disclaimer.
+** 2. Redistributions in binary form must reproduce the above copyright notice,
+**    this list of conditions and the following disclaimer in the documentation
+**    and/or other materials provided with the distribution.
+**
+** THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+** ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+** WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+** DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+** ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+** (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+** LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+** ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+** SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
+`define IsSpace(c) class'TKPStandard'.static.IsSpace(`c)
+`define TrimString(s) class'TKPStandard'.static.TrimString(`s)
+`define ParseTime(Time) class'TKPStandard'.static.ParseTime(`Time)
+
+const REMOVE_INTERVAL_DEFAULT = 120; // Every two minutes without team damaging.
+const POINTS_MAX_DEFAULT = 1000;
+
+// Warning flags.
+const FIRST_TK_WARNING = 0x01;
+const SECOND_TK_WARNING = 0x02;
+const THIRD_TK_WARNING = 0x03;
+
+enum ETKVariable
+{
+
+    TKVAR_PointsPerDamage,
+    TKVAR_PointsPerPunish,
+    TKVAR_PointsPerAutoPunish,
+    TKVAR_PointsRemoveInterval,
+    TKVAR_PointsRemovedPerInterval,
+    TKVAR_PointsMax,
+    TKVAR_BanDuration,
+
+    `if(`isdefined(TKPMod_TO))
+
+        TKVAR_IgnoreKing // Only available for Team Objective mode.
+
+    `endif
+
+};
+
+struct TKInfo
+{
+
+    var UniqueNetId PlayerID;
+    var UniqueNetId TKedBy;
+    var int TKPoints;
+    var float StartLosingTKPoints;
+    var byte Warning; // Warning flags.
+    var float PunishTimeout;
+
+    StructDefaultProperties
+    {
+
+        TKPoints = 0;
+        StartLosingTKPoints = 0.f;
+        Warning = 0x00;
+        PunishTimeout = 0.f;
+
+    }
+
+};
+
+struct AdminTKInfo // Only used for GetTKPlayerInfo.
+{
+
+    var UniqueNetId PlayerID;
+    var string PlayerName;
+    var int TKPoints;
+
+};
+
+/** Server operator customizable parameters. **/
+var globalconfig int TKPointsPerDamage;
+var globalconfig int TKPointsPerPunish;
+var globalconfig int TKPointsPerAutoPunish;
+var globalconfig float TKPointsRemoveInterval;
+var globalconfig int TKPointsRemovedPerInterval;
+var globalconfig int TKPointsMax;
+var globalconfig float TKBanDuration;
+
+`if(`isdefined(TKPMod_TO))
+
+    var globalconfig bool TKIgnoreKing; // Only available for Team Objective mode.
+
+`endif
+
+/**************/
+
+var const UniqueNetId ZeroNetID;
+var protected array<TKInfo> TKPlayerInfo;
+var protectedwrite float PunishTimeoutTime;
+var protectedwrite int WarningBoundaries[3]; // Values should be stored as percentage.
+var protectedwrite string FirstTKWarningColor;
+var protectedwrite string SecondTKWarningColor;
+var protectedwrite string ThirdTKWarningColor;
+
+/* TK System Methods. */
+
+protected function UpdateTKGameSettings()
+{
+
+    /* We call this method to make sure our configuration values are not out of bound. */
+
+    TKPointsPerDamage = Max(0, TKPointsPerDamage);
+    TKPointsPerPunish = Max(0, TKPointsPerPunish);
+    TKPointsPerAutoPunish = Max(0, TKPointsPerAutoPunish);
+
+    if (TKPointsRemoveInterval < 1.f) // 1 second should be the minimum. Use default value if less than 1 second.
+        TKPointsRemoveInterval = REMOVE_INTERVAL_DEFAULT;
+
+    TKPointsRemovedPerInterval = Max(0, TKPointsRemovedPerInterval);
+
+    if (TKPointsMax < 1) // 1 point should be the minimum. Use default value if less than 1 point, else we won't be able to disable this system.
+        TKPointsMax = POINTS_MAX_DEFAULT;
+
+    TKBanDuration = Max(0.f, TKBanDuration);
+
+}
+
+protected function ResetTKSystem()
+{
+
+    TKPlayerInfo.Remove(0, TKPlayerInfo.Length);
+    UpdateTKGameSettings();
+
+}
+
+protected function ResetTKPlayerInfo(int TKPlayerIndex)
+{
+
+    local UniqueNetId TKPlayerID;
+    local int i;
+
+    TKPlayerID = TKPlayerInfo[TKPlayerIndex].PlayerID;
+
+    for (i = 0; i < TKPlayerInfo.Length; i++)
+    {
+
+        if (TKPlayerInfo[i].TKedBy == TKPlayerID)
+        {
+
+            TKPlayerInfo[i].TKedBy = ZeroNetID;
+            TKPlayerInfo[i].PunishTimeout = 0.f;
+
+        }
+
+    }
+
+    TKPlayerInfo[TKPlayerIndex].TKedBy = ZeroNetID;
+    TKPlayerInfo[TKPlayerIndex].TKPoints = 0;
+    TKPlayerInfo[TKPlayerIndex].StartLosingTKPoints = 0.f;
+    TKPlayerInfo[TKPlayerIndex].Warning = 0x00;
+    TKPlayerInfo[TKPlayerIndex].PunishTimeout = 0.f;
+
+}
+
+function AOCPlayerController GetPlayerControllerFromNetID(UniqueNetId NetID)
+{
+
+    local AOCPlayerController PC;
+
+    foreach WorldInfo.AllControllers(class'AOCPlayerController', PC)
+    {
+
+        if (PC.PlayerReplicationInfo.UniqueId == NetID)
+            return PC;
+
+    }
+
+    return none;
+
+}
+
+function PlayerReplicationInfo GetPlayerReplicationInfoFromNetID(UniqueNetId NetID)
+{
+
+    local PlayerReplicationInfo PRI;
+
+    foreach WorldInfo.GRI.PRIArray(PRI)
+    {
+
+        if (PRI.UniqueId == NetID)
+            return PRI;
+
+    }
+
+    return none;
+
+}
+
+function int GetPlayerIndexOnTKSystem(UniqueNetId PlayerID)
+{
+
+    return TKPlayerInfo.Find('PlayerID', PlayerID);
+
+}
+
+function byte GetWarningFlag(int TKPercentage)
+{
+
+    local byte WarningFlag;
+    local int i;
+
+    WarningFlag = 0x00;
+
+    for (i = 0; i < ArrayCount(WarningBoundaries); i++)
+    {
+
+        WarningFlag += byte(TKPercentage >= WarningBoundaries[i]);
+
+    }
+
+    return WarningFlag;
+
+}
+
+function int GetTKPercentage(int TKPoints)
+{
+
+    return Round((TKPoints * 100.f) / TKPointsMax);
+
+}
+
+function bool ArePlayersInTheSameTeam(AOCPlayerController PC1, AOCPlayerController PC2)
+{
+
+    return (PC1.CurrentFamilyInfo.default.FamilyFaction == PC2.CurrentFamilyInfo.default.FamilyFaction);
+
+}
+
+`if(`isdefined(TKPMod_TO))
+
+    // Only available for Team Objective mode.
+
+    function bool IsPlayerKing(AOCPlayerController PC)
+    {
+
+        return (class<AOCFamilyInfo_Agatha_King>(PC.CurrentFamilyInfo) != none || class<AOCFamilyInfo_Mason_King>(PC.CurrentFamilyInfo) != none);
+
+    }
+
+`endif
+
+protected function SendTKWarning(int TKPlayerIndex, AOCPlayerController PC)
+{
+
+    local int TKPercentage;
+    local byte NewWarningFlag;
+    local string WarningColor;
+
+    if (PC == none)
+        return;
+
+    TKPercentage = GetTKPercentage(TKPlayerInfo[TKPlayerIndex].TKPoints);
+    NewWarningFlag = GetWarningFlag(TKPercentage);
+
+    if (NewWarningFlag == TKPlayerInfo[TKPlayerIndex].Warning) // No warning needs to be sent.
+        return;
+
+    switch (NewWarningFlag)
+    {
+
+        case FIRST_TK_WARNING:
+
+            WarningColor = FirstTKWarningColor;
+            break;
+
+        case SECOND_TK_WARNING:
+
+            WarningColor = SecondTKWarningColor;
+            break;
+
+        case THIRD_TK_WARNING:
+
+            WarningColor = ThirdTKWarningColor;
+            break;
+
+        default:
+
+            return;
+            break;
+
+    }
+
+    TKPlayerInfo[TKPlayerIndex].Warning = NewWarningFlag;
+    PC.ReceiveChatMessage("", "You've reached"@TKPercentage$"% on TK Points!", EFAC_ALL,,true, WarningColor);  
+
+}
+
+protected function bool WasTKed(int TKPlayerIndex)
+{
+
+    return (TKPlayerInfo[TKPlayerIndex].TKedBy != ZeroNetID);
+
+}
+
+protected function bool ShouldBanPlayerForTKing(int TKPlayerIndex)
+{
+
+    return (TKPlayerInfo[TKPlayerIndex].TKPoints >= TKPointsMax);
+
+}
+
+protected function TKBanPlayer(UniqueNetId PlayerID, optional AOCPlayerController PC)
+{
+
+    local string BanDurationString;
+    local string BannedPlayerName;
+    local PlayerReplicationInfo PRI;
+
+    BanDurationString = (TKBanDuration > 0) ? `ParseTime(Round(TKBanDuration)) : "Permanent";
+
+    if (PC != none)
+    {
+
+        if (!AccessControl.IsAdmin(PC))
+        {
+
+            BannedPlayerName = PC.PlayerReplicationInfo.PlayerName;
+            AOCAccessControl(AccessControl).KickBanGlobal(PC, TKBanDuration, "Too many TK points. Duration:"@BanDurationString);
+            BroadcastMessage(none, BannedPlayerName@"has been kicked for teamkilling too much.", EFAC_ALL, true);
+
+        }
+
+        else
+            BroadcastMessageToPlayer(PC, "As an admin, you will not be banned by the TK System.");
+
+    }
+
+    else // Player disconnected before he/she could be kickbanned. No matter, ban his/her NetID.
+    {
+
+        // Let's see if we can get his/her name from a player replication info.
+        PRI = GetPlayerReplicationInfoFromNetID(PlayerID);
+        BannedPlayerName = (PRI != none) ? PRI.PlayerName : "<AUTO: TK System Ban>";
+        AOCAccessControl(AccessControl).AddBan(BannedPlayerName, "Too many TK points. Duration:"@BanDurationString, TKBanDuration, PlayerID);
+
+    }
+
+}
+
+protected function IncreaseTKPoints(int TKPointsAmount, int TKPlayerIndex, optional AOCPlayerController PC)
+{
+
+    TKPlayerInfo[TKPlayerIndex].TKPoints += TKPointsAmount;
+    SendTKWarning(TKPlayerIndex, PC);
+
+    if (ShouldBanPlayerForTKing(TKPlayerIndex))
+    {
+
+        TKBanPlayer(TKPlayerInfo[TKPlayerIndex].PlayerID, PC);
+        ResetTKPlayerInfo(TKPlayerIndex); // Player is banned. Reset his/her info.
+
+    }
+
+}
+
+protected function DecreaseTKPoints(int TKPointsAmount, int TKPlayerIndex)
+{
+
+    TKPlayerInfo[TKPlayerIndex].TKPoints = Max(0, (TKPlayerInfo[TKPlayerIndex].TKPoints - TKPointsAmount));
+    TKPlayerInfo[TKPlayerIndex].Warning = GetWarningFlag(GetTKPercentage(TKPlayerInfo[TKPlayerIndex].TKPoints)); // A bit terse, yeah.
+
+}
+
+protected function ManageTKSystem()
+{
+
+    /* Removes TK points from players aswell as auto-punish if punish timeout was reached. */
+
+    local float ctime;
+    local int i;
+
+    ctime = WorldInfo.TimeSeconds;
+
+    for (i = 0; i < TKPlayerInfo.Length; i++)
+    {
+
+        if (TKPointsRemovedPerInterval > 0)
+        {
+
+            if (TKPlayerInfo[i].TKPoints > 0 && TKPlayerInfo[i].StartLosingTKPoints <= ctime)
+            {
+
+                DecreaseTKPoints(TKPointsRemovedPerInterval, i);
+                TKPlayerInfo[i].StartLosingTKPoints = (ctime + TKPointsRemoveInterval); // Update time for the next interval.
+
+            }
+
+        }
+
+        if (WasTKed(i) && TKPlayerInfo[i].PunishTimeout <= ctime)
+            AutoPunishTK(i, GetPlayerControllerFromNetID(TKPlayerInfo[i].PlayerID));
+
+    }
+
+}
+
+function ProcessTeamDamage(int HealthDamageDealt, AOCPlayerController Victim, AOCPlayerController Attacker)
+{
+
+    local int TKPlayerIndex;
+
+    if (!bGameStarted || bGameEnded) // No team damage applied to PreGame and EndGame.
+        return;
+
+    if (TKPointsPerDamage <= 0) // Team damage will not give any extra points.
+        return;
+
+    if (Attacker.PlayerReplicationInfo.UniqueId == ZeroNetID)
+        return;
+
+    if (!ArePlayersInTheSameTeam(Victim, Attacker))
+        return;
+
+    `if(`isdefined(TKPMod_TO))
+
+        if (TKIgnoreKing && IsPlayerKing(Attacker)) // Only available for Team Objective mode.
+            return;
+
+    `endif
+
+    TKPlayerIndex = GetPlayerIndexOnTKSystem(Attacker.PlayerReplicationInfo.UniqueId);
+
+    if (TKPlayerIndex == INDEX_NONE)
+        return; // This should never evaluate to true. Safety check nevertheless.
+
+    TKPlayerInfo[TKPlayerIndex].StartLosingTKPoints = (WorldInfo.TimeSeconds + TKPointsRemoveInterval); // Update time for last team damage dealt.
+    IncreaseTKPoints((HealthDamageDealt * TKPointsPerDamage), TKPlayerIndex, Attacker);
+
+}
+
+protected function SetTK(int TKedPlayerIndex, UniqueNetId TKerID)
+{
+
+    TKPlayerInfo[TKedPlayerIndex].TKedBy = TKerID;
+    // Time in which the player can punish or forgive his/her team killer. Dying for a second time or reaching this time will cause an auto-punish.
+    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = (WorldInfo.TimeSeconds + PunishTimeoutTime);
+
+}
+
+protected function AutoPunishTK(int TKedPlayerIndex, AOCPlayerController TKedPC)
+{
+
+    local UniqueNetId TKerID;
+    local int TKerPlayerIndex;
+    local AOCPlayerController TKerPC;
+
+    TKerID = TKPlayerInfo[TKedPlayerIndex].TKedBy;
+    TKPlayerInfo[TKedPlayerIndex].TKedBy = ZeroNetID;
+    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = 0.f;
+
+    if (TKedPC == none) // Something bad just happened.
+        return;
+
+    if (TKPointsPerAutoPunish <= 0) // Auto-punish is not enabled.
+        return;
+
+    TKerPlayerIndex = GetPlayerIndexOnTKSystem(TKerID);
+
+    if (TKerPlayerIndex == INDEX_NONE)
+        return; // This should never evaluate to true. Safety check nevertheless.
+
+    TKerPC = GetPlayerControllerFromNetID(TKerID);
+
+    if (TKerPC != none)
+        BroadcastMessageToPlayer(TKerPC, "You've been auto-punished for teamkilling"@TKedPC.PlayerReplicationInfo.PlayerName$".");
+
+    IncreaseTKPoints(TKPointsPerAutoPunish, TKerPlayerIndex, TKerPC);
+
+}
+
+protected function PunishTK(int TKedPlayerIndex, AOCPlayerController TKedPC)
+{
+
+    local UniqueNetId TKerID;
+    local int TKerPlayerIndex;
+    local AOCPlayerController TKerPC;
+    local PlayerReplicationInfo PRI;
+
+    TKerID = TKPlayerInfo[TKedPlayerIndex].TKedBy;
+    TKPlayerInfo[TKedPlayerIndex].TKedBy = ZeroNetID;
+    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = 0.f;
+
+    if (TKPointsPerPunish <= 0) // Punish will not give any extra points.
+        return;
+
+    TKerPlayerIndex = GetPlayerIndexOnTKSystem(TKerID);
+
+    if (TKerPlayerIndex == INDEX_NONE)
+        return; // This should never evaluate to true. Safety check nevertheless.
+
+    TKerPC = GetPlayerControllerFromNetID(TKerID);
+
+    if (TKerPC != none)
+    {
+
+        BroadcastMessageToPlayer(TKedPC, "You've punished"@TKerPC.PlayerReplicationInfo.PlayerName@"for teamkilling you!");
+        BroadcastMessageToPlayer(TKerPC, "You've been punished for teamkilling"@TKedPC.PlayerReplicationInfo.PlayerName$".");
+
+    }
+
+    else
+    {
+
+        PRI = GetPlayerReplicationInfoFromNetID(TKerID);
+
+        if (PRI != none) // Let's see if we can get his/her name from a player replication info.
+            BroadcastMessageToPlayer(TKedPC, "You've punished"@PRI.PlayerName@"for teamkilling you!");
+
+        else
+            BroadcastMessageToPlayer(TKedPC, "You've punished the last player who teamkilled you!");
+
+    }
+
+    IncreaseTKPoints(TKPointsPerPunish, TKerPlayerIndex, TKerPC);
+
+}
+
+protected function ForgiveTK(int TKedPlayerIndex, AOCPlayerController TKedPC)
+{
+
+    local UniqueNetId TKerID;
+    local AOCPlayerController TKerPC;
+    local PlayerReplicationInfo PRI;
+
+    TKerID = TKPlayerInfo[TKedPlayerIndex].TKedBy;
+    TKPlayerInfo[TKedPlayerIndex].TKedBy = ZeroNetID;
+    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = 0.f;
+
+    if (GetPlayerIndexOnTKSystem(TKerID) == INDEX_NONE)
+        return; // This should never evaluate to true. Safety check nevertheless.
+
+    TKerPC = GetPlayerControllerFromNetID(TKerID);
+
+    if (TKerPC != none)
+    {
+
+        BroadcastMessageToPlayer(TKedPC, "You've forgiven"@TKerPC.PlayerReplicationInfo.PlayerName@"for teamkilling you!");
+        BroadcastMessageToPlayer(TKerPC, "You've been forgiven by"@TKedPC.PlayerReplicationInfo.PlayerName$".");
+
+    }
+
+    else
+    {
+
+        PRI = GetPlayerReplicationInfoFromNetID(TKerID);
+
+        if (PRI != none) // Let's see if we can get his/her name from a player replication info.
+            BroadcastMessageToPlayer(TKedPC, "You've forgiven"@PRI.PlayerName@"for teamkilling you!");
+
+        else
+            BroadcastMessageToPlayer(TKedPC, "You've forgiven the last player who teamkilled you!");
+
+    }
+
+}
+
+protected function bool ProcessTKCommandFromMessage(AOCPlayerController Sender, string Message)
+{
+
+    /* Returns true if a TK command was processed. */
+
+    local int TKPlayerIndex;
+
+    if (Sender == none || Sender.PlayerReplicationInfo.UniqueId == ZeroNetID)
+        return false;
+
+    TKPlayerIndex = GetPlayerIndexOnTKSystem(Sender.PlayerReplicationInfo.UniqueId);
+
+    if (TKPlayerIndex == INDEX_NONE)
+        return false;
+
+    if (!WasTKed(TKPlayerIndex))
+        return false;
+
+    switch (Locs(`TrimString(Message)))
+    {
+
+        case "!p":
+        case "!punish":
+
+            PunishTK(TKPlayerIndex, Sender);
+            return true;
+            break;
+
+        case "!f":
+        case "!forgive":
+
+            ForgiveTK(TKPlayerIndex, Sender);
+            return true;
+            break;
+
+        default:
+            break;
+
+    }
+
+    return false;
+
+}
+
+delegate int TKPlayerInfoSort(AdminTKInfo A, AdminTKInfo B)
+{
+
+    /* Sort items by Player Name, and if both names are equal then by SteamID.
+       Name sorting is case-insensitive. */
+
+    local string PlayerNameA, PlayerNameB;
+
+    PlayerNameA = Locs(A.PlayerName);
+    PlayerNameB = Locs(B.PlayerName); 
+
+    if (PlayerNameA == PlayerNameB)
+    {
+
+        // Little endian QWORD.
+
+        if (A.PlayerID.Uid.B > B.PlayerID.Uid.B)
+            return -1;
+
+        else if (A.PlayerID.Uid.B < B.PlayerID.Uid.B)
+            return 1;
+
+        // (A) Uid.B == (B) Uid.B
+
+        if (A.PlayerID.Uid.A > B.PlayerID.Uid.A)
+            return -1;
+
+        else if (A.PlayerID.Uid.A < B.PlayerID.Uid.A)
+            return 1;
+
+        // (A) Uid.A == (B) Uid.A
+
+        return 0;
+
+    }
+
+    return ((PlayerNameA > PlayerNameB) ? -1 : 1);
+
+}
+
+function SaveTKValues(AOCPlayerController Requester)
+{
+
+    /* Flush current (buffered in memory) TK variables values to disk (.ini). */
+
+    if (!AccessControl.IsAdmin(Requester))
+        return;
+
+    SaveConfig();
+
+}
+
+function SetTKValue(AOCPlayerController Requester, ETKVariable opcode, optional int NewValueInt, optional float NewValueFloat, optional bool NewValueBool)
+{
+
+    /* Sets new values for the TK system variables. */
+
+    if (!AccessControl.IsAdmin(Requester))
+        return;
+
+    switch (opcode)
+    {
+
+        case TKVAR_PointsPerDamage:
+
+            TKPointsPerDamage = NewValueInt;
+            break;
+
+        case TKVAR_PointsPerPunish:
+
+            TKPointsPerPunish = NewValueInt;
+            break;
+
+        case TKVAR_PointsPerAutoPunish:
+
+            TKPointsPerAutoPunish = NewValueInt;
+            break;
+
+        case TKVAR_PointsRemoveInterval:
+
+            TKPointsRemoveInterval = NewValueFloat;
+            break;
+
+        case TKVAR_PointsRemovedPerInterval:
+
+            TKPointsRemovedPerInterval = NewValueInt;
+            break;
+
+        case TKVAR_PointsMax:
+
+            TKPointsMax = NewValueInt;
+            break;
+
+        case TKVAR_BanDuration:
+
+            TKBanDuration = NewValueFloat;
+            break;
+
+        `if(`isdefined(TKPMod_TO))
+
+            case TKVAR_IgnoreKing: // Only available for Team Objective mode.
+
+                TKIgnoreKing = NewValueBool;
+                break;
+
+        `endif
+
+        default:
+
+            return;
+            break;
+
+    }
+
+    UpdateTKGameSettings();
+
+}
+
+function bool GetTKValues(AOCPlayerController Requester, out string TKValuesString)
+{
+
+    /* Returns true if the info could be successfully retrieved, else returns false. */
+
+    if (!AccessControl.IsAdmin(Requester))
+        return false;
+
+    TKValuesString = "TK Punishment System Variables:\n\n";
+    TKValuesString $= "TKPointsPerDamage="$TKPointsPerDamage$"\n";
+    TKValuesString $= "TKPointsPerPunish="$TKPointsPerPunish$"\n";
+    TKValuesString $= "TKPointsPerAutoPunish="$TKPointsPerAutoPunish$"\n";
+    TKValuesString $= "TKPointsRemoveInterval="$TKPointsRemoveInterval$"\n";
+    TKValuesString $= "TKPointsRemovedPerInterval="$TKPointsRemovedPerInterval$"\n";
+    TKValuesString $= "TKPointsMax="$TKPointsMax$"\n";
+    TKValuesString $= "TKBanDuration="$TKBanDuration$"\n";
+
+    `if(`isdefined(TKPMod_TO))
+
+        TKValuesString $= "TKIgnoreKing="$TKIgnoreKing$"\n"; // Only available for Team Objective mode.
+
+    `endif
+
+    TKValuesString $= "\n";
+
+    return true;
+
+}
+
+function bool GetTKPlayerInfo(AOCPlayerController Requester, out string TKPlayerInfoString)
+{
+
+    /* Returns true if the info could be successfully retrieved, else returns false. */
+
+    local TKInfo TKPlayer;
+    local PlayerReplicationInfo PRI;
+    local AdminTKInfo AdminTKPlayer;
+    local array<AdminTKInfo> AdminTKPlayers;
+
+    if (!AccessControl.IsAdmin(Requester))
+        return false;
+
+    foreach TKPlayerInfo(TKPlayer)
+    {
+
+        PRI = GetPlayerReplicationInfoFromNetID(TKPlayer.PlayerID);
+
+        if (PRI != none)
+        {
+
+            AdminTKPlayer.PlayerID = TKPlayer.PlayerID;
+            AdminTKPlayer.PlayerName = PRI.PlayerName;
+            AdminTKPlayer.TKPoints = TKPlayer.TKPoints;
+            AdminTKPlayers.AddItem(AdminTKPlayer);
+
+        }
+
+    }
+
+    if (AdminTKPlayers.Length == 0)
+        return false;
+
+    AdminTKPlayers.Sort(TKPlayerInfoSort); // We want to sort our entries alphabetically/SteamID before pushing it to the client.
+    TKPlayerInfoString = "TK Punishment System Player Info:\n\n";
+
+    foreach AdminTKPlayers(AdminTKPlayer)
+    {
+
+        TKPlayerInfoString $= AdminTKPlayer.PlayerName;
+        TKPlayerInfoString @= "<"$class'OnlineSubsystem'.static.UniqueNetIdToString(AdminTKPlayer.PlayerID)$">:";
+        TKPlayerInfoString @= AdminTKPlayer.TKPoints@"TK Points\n";
+
+    }
+
+    TKPlayerInfoString $= "\n";
+
+    return true;
+
+}
+
+/* Game mode overridden methods. */
+
+Auto State AOCPreRound
+{
+
+    function BeginState(Name PreviousStateName)
+    {
+
+        // Initialize TK System.
+        ClearTimer('ManageTKSystem');
+        ResetTKSystem();
+        SetTimer(1.f, true, 'ManageTKSystem');
+
+        super.BeginState(PreviousStateName);
+
+    }
+
+}
+
+function PerformOnFirstSpawn(Controller NewPlayer) // We want to create a TKInfo object for the player as soon as he performs his first spawn.
+{
+
+    local TKInfo TKPlayer;
+
+    if (NewPlayer != none && NewPlayer.PlayerReplicationInfo != none && NewPlayer.PlayerReplicationInfo.UniqueId != ZeroNetID)
+    {
+
+        if (GetPlayerIndexOnTKSystem(NewPlayer.PlayerReplicationInfo.UniqueId) == INDEX_NONE) // Is this player already in our array?
+        {
+
+            TKPlayer.PlayerID = NewPlayer.PlayerReplicationInfo.UniqueId;
+            TKPlayerInfo.AddItem(TKPlayer);
+
+        }
+
+    }
+
+    super.PerformOnFirstSpawn(NewPlayer);
+
+}
+
+function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, class<DamageType> damageType)
+{
+
+    local AOCPlayerController KillerPC, KilledPC;
+    local int VictimPlayerIndex;
+
+    super.Killed(Killer, KilledPlayer, KilledPawn, damageType);
+
+    // First we check to see if the player has a pending TK to punish.
+
+    KilledPC = AOCPlayerController(KilledPlayer);
+
+    if (KilledPC == none)
+        return;
+
+    if (KilledPC.PlayerReplicationInfo.UniqueId == ZeroNetID)
+        return;
+
+    VictimPlayerIndex = GetPlayerIndexOnTKSystem(KilledPC.PlayerReplicationInfo.UniqueId);
+
+    if (VictimPlayerIndex == INDEX_NONE)
+        return;
+
+    if (WasTKed(VictimPlayerIndex))
+        AutoPunishTK(VictimPlayerIndex, KilledPC); // Auto punish if player didn't punish or forgive before dying for a second time.
+
+    // Now we check for a new TK.
+
+    if (!bGameStarted || bGameEnded) // No TKs applied to PreGame and EndGame.
+        return;
+
+    if (TKPointsPerPunish <= 0) // Punish will not give any extra points.
+        return;
+
+    if (Killer == KilledPlayer)
+        return;
+
+    KillerPC = AOCPlayerController(Killer);
+
+    if (KillerPC == none)
+        return;
+
+    if (ArePlayersInTheSameTeam(KillerPC, KilledPC))
+    {
+
+        `if(`isdefined(TKPMod_TO))
+
+            if (TKIgnoreKing && IsPlayerKing(KillerPC)) // Only available for Team Objective mode.
+                return;
+
+        `endif
+
+        if (KillerPC.PlayerReplicationInfo.UniqueId == ZeroNetID)
+            return;
+
+        if (GetPlayerIndexOnTKSystem(KillerPC.PlayerReplicationInfo.UniqueId) == INDEX_NONE)
+            return;
+
+        BroadcastMessageToPlayer(KilledPC, "You've been teamkilled by"@Killer.PlayerReplicationInfo.PlayerName$". Type !p to punish or !f to forgive.");
+        SetTK(VictimPlayerIndex, KillerPC.PlayerReplicationInfo.UniqueId);
+
+    }
+
+}
+
+function BroadcastMessage(PlayerController Sender, string Message, EAOCFaction DesignatedTeam, optional bool bSystemMessage = false, optional bool bUseCustomColor = false, optional string Col)
+{
+
+    if (ProcessTKCommandFromMessage(AOCPlayerController(Sender), Message))
+        RemoteConsole.GameEvent_BroadcastMessage(Sender.PlayerReplicationInfo, Message, DesignatedTeam);
+
+    else
+        super.BroadcastMessage(Sender, Message, DesignatedTeam, bSystemMessage, bUseCustomColor, Col);
+
+}
+
+function Logout(Controller Exiting)
+{
+
+    local int ExitingPlayerIndex;
+
+    if (Exiting != none && Exiting.PlayerReplicationInfo != none && Exiting.PlayerReplicationInfo.UniqueId != ZeroNetID)
+    {
+
+        ExitingPlayerIndex = GetPlayerIndexOnTKSystem(Exiting.PlayerReplicationInfo.UniqueId);
+
+        if (ExitingPlayerIndex != INDEX_NONE)
+        {
+
+            TKPlayerInfo[ExitingPlayerIndex].Warning = 0x00; // Clear any warnings before leaving.
+
+            if (WasTKed(ExitingPlayerIndex))
+                AutoPunishTK(ExitingPlayerIndex, AOCPlayerController(Exiting)); // Auto punish if player didn't punish or forgive before logging out.
+
+        }
+
+    }
+
+    super.Logout(Exiting);
+
+}
+
+DefaultProperties
+{
+
+    PlayerControllerClass=class'`{GAMEMODE}PlayerController'
+    DefaultPawnClass=class'`{GAMEMODE}Pawn'
+    PunishTimeoutTime = 20.f // 20 seconds for Punish Timeout base time.
+    WarningBoundaries[0] = 25; // 25%
+    WarningBoundaries[1] = 50; // 50%
+    WarningBoundaries[2] = 75; // 75%
+    FirstTKWarningColor = "#00FF00" // Green.
+    SecondTKWarningColor = "#FF9900" // Orange.
+    ThirdTKWarningColor = "#FF0000" // Red.
+
+}
