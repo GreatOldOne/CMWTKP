@@ -25,14 +25,6 @@
 
 `define GAME (WorldInfo.Game)
 
-enum ETKInfo
-{
-
-    TKINFO_Values,
-    TKINFO_Players
-
-};
-
 protected reliable client function ClientDisplayTKInfo(string TKInfoString, optional bool CopyToClipboard = false)
 {
 

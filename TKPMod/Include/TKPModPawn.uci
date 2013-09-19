@@ -49,6 +49,6 @@ event TakeDamage(int Damage, Controller InstigatedBy, vector HitLocation, vector
     if (VictimPC == none || AttackerPC == none || VictimPC == AttackerPC)
         return;
 
-    `{GAMEMODE}`{GAME}.ProcessTeamDamage(HealthDamageDealt, VictimPC, AttackerPC);
+    `{GAMEMODE}`{GAME}.ProcessTeamDamage(HealthDamageDealt, VictimPC, AttackerPC, self, AOCPawn(AttackerPC.Pawn));
 
 }

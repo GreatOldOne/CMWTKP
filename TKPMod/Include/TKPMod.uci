@@ -27,14 +27,6 @@
 `define TrimString(s) class'TKPStandard'.static.TrimString(`s)
 `define ParseTime(Time) class'TKPStandard'.static.ParseTime(`Time)
 
-const REMOVE_INTERVAL_DEFAULT = 120; // Every two minutes without team damaging.
-const POINTS_MAX_DEFAULT = 1000;
-
-// Warning flags.
-const FIRST_TK_WARNING = 0x01;
-const SECOND_TK_WARNING = 0x02;
-const THIRD_TK_WARNING = 0x03;
-
 enum ETKVariable
 {
 
@@ -51,6 +43,14 @@ enum ETKVariable
         TKVAR_IgnoreKing // Only available for Team Objective mode.
 
     `endif
+
+};
+
+enum ETKInfo
+{
+
+    TKINFO_Values,
+    TKINFO_Players
 
 };
 
@@ -104,11 +104,9 @@ var globalconfig float TKBanDuration;
 
 var const UniqueNetId ZeroNetID;
 var protected array<TKInfo> TKPlayerInfo;
-var protectedwrite float PunishTimeoutTime;
+var protectedwrite float DefaultPunishTimeout;
 var protectedwrite int WarningBoundaries[3]; // Values should be stored as percentage.
-var protectedwrite string FirstTKWarningColor;
-var protectedwrite string SecondTKWarningColor;
-var protectedwrite string ThirdTKWarningColor;
+var protectedwrite string WarningColors[3]; // Values should be stored as HTML colors.
 
 /* TK System Methods. */
 
@@ -120,16 +118,10 @@ protected function UpdateTKGameSettings()
     TKPointsPerDamage = Max(0, TKPointsPerDamage);
     TKPointsPerPunish = Max(0, TKPointsPerPunish);
     TKPointsPerAutoPunish = Max(0, TKPointsPerAutoPunish);
-
-    if (TKPointsRemoveInterval < 1.f) // 1 second should be the minimum. Use default value if less than 1 second.
-        TKPointsRemoveInterval = REMOVE_INTERVAL_DEFAULT;
-
+    TKPointsRemoveInterval = FMax(1.f, TKPointsRemoveInterval); // 1 second should be the minimum.
     TKPointsRemovedPerInterval = Max(0, TKPointsRemovedPerInterval);
-
-    if (TKPointsMax < 1) // 1 point should be the minimum. Use default value if less than 1 point, else we won't be able to disable this system.
-        TKPointsMax = POINTS_MAX_DEFAULT;
-
-    TKBanDuration = Max(0.f, TKBanDuration);
+    TKPointsMax = Max(1, TKPointsMax); // 1 point should be the minimum, else we won't be able to disable this system.
+    TKBanDuration = FMax(0.f, TKBanDuration);
 
 }
 
@@ -237,10 +229,33 @@ function int GetTKPercentage(int TKPoints)
 
 }
 
-function bool ArePlayersInTheSameTeam(AOCPlayerController PC1, AOCPlayerController PC2)
+function bool ArePlayersInTheSameTeam(AOCPlayerController PC1, AOCPlayerController PC2, optional AOCPawn P1, optional AOCPawn P2)
 {
 
-    return (PC1.CurrentFamilyInfo.default.FamilyFaction == PC2.CurrentFamilyInfo.default.FamilyFaction);
+    local class<AOCFamilyInfo> FI1, FI2;
+
+    if (P1 != none && P1.PawnFamily != none)
+        FI1 = P1.PawnFamily;
+
+    else if (PC1.CurrentFamilyInfo != none)
+        FI1 = PC1.CurrentFamilyInfo;
+
+    else
+        return false;
+
+    if (P2 != none && P2.PawnFamily != none)
+        FI2 = P2.PawnFamily;
+
+    else if (PC2.CurrentFamilyInfo != none)
+        FI2 = PC2.CurrentFamilyInfo;
+
+    else
+        return false;
+
+    if (FI1 == class'AOCFamilyInfo_None' || FI2 == class'AOCFamilyInfo_None')
+        return false;
+
+    return (FI1.default.FamilyFaction == FI2.default.FamilyFaction);
 
 }
 
@@ -248,10 +263,18 @@ function bool ArePlayersInTheSameTeam(AOCPlayerController PC1, AOCPlayerControll
 
     // Only available for Team Objective mode.
 
-    function bool IsPlayerKing(AOCPlayerController PC)
+    function bool IsPlayerKing(AOCPlayerController PC, optional AOCPawn P)
     {
 
-        return (class<AOCFamilyInfo_Agatha_King>(PC.CurrentFamilyInfo) != none || class<AOCFamilyInfo_Mason_King>(PC.CurrentFamilyInfo) != none);
+        local class<AOCFamilyInfo> FI;
+
+        if (P != none && P.PawnFamily != none)
+            FI = P.PawnFamily;
+
+        else if (PC.CurrentFamilyInfo != none)
+            FI = PC.CurrentFamilyInfo;
+
+        return (class<AOCFamilyInfo_Agatha_King>(FI) != none || class<AOCFamilyInfo_Mason_King>(FI) != none);
 
     }
 
@@ -262,7 +285,6 @@ protected function SendTKWarning(int TKPlayerIndex, AOCPlayerController PC)
 
     local int TKPercentage;
     local byte NewWarningFlag;
-    local string WarningColor;
 
     if (PC == none)
         return;
@@ -270,36 +292,13 @@ protected function SendTKWarning(int TKPlayerIndex, AOCPlayerController PC)
     TKPercentage = GetTKPercentage(TKPlayerInfo[TKPlayerIndex].TKPoints);
     NewWarningFlag = GetWarningFlag(TKPercentage);
 
-    if (NewWarningFlag == TKPlayerInfo[TKPlayerIndex].Warning) // No warning needs to be sent.
-        return;
-
-    switch (NewWarningFlag)
+    if (NewWarningFlag > TKPlayerInfo[TKPlayerIndex].Warning) // Send new warning?
     {
 
-        case FIRST_TK_WARNING:
-
-            WarningColor = FirstTKWarningColor;
-            break;
-
-        case SECOND_TK_WARNING:
-
-            WarningColor = SecondTKWarningColor;
-            break;
-
-        case THIRD_TK_WARNING:
-
-            WarningColor = ThirdTKWarningColor;
-            break;
-
-        default:
-
-            return;
-            break;
+        TKPlayerInfo[TKPlayerIndex].Warning = NewWarningFlag;
+        PC.ReceiveChatMessage("", "You've reached"@TKPercentage$"% on TK Points!", EFAC_ALL,,true, WarningColors[NewWarningFlag-1]);
 
     }
-
-    TKPlayerInfo[TKPlayerIndex].Warning = NewWarningFlag;
-    PC.ReceiveChatMessage("", "You've reached"@TKPercentage$"% on TK Points!", EFAC_ALL,,true, WarningColor);  
 
 }
 
@@ -364,8 +363,8 @@ protected function IncreaseTKPoints(int TKPointsAmount, int TKPlayerIndex, optio
     if (ShouldBanPlayerForTKing(TKPlayerIndex))
     {
 
+        ResetTKPlayerInfo(TKPlayerIndex); // Player is about to be banned. Reset his/her info.
         TKBanPlayer(TKPlayerInfo[TKPlayerIndex].PlayerID, PC);
-        ResetTKPlayerInfo(TKPlayerIndex); // Player is banned. Reset his/her info.
 
     }
 
@@ -412,7 +411,7 @@ protected function ManageTKSystem()
 
 }
 
-function ProcessTeamDamage(int HealthDamageDealt, AOCPlayerController Victim, AOCPlayerController Attacker)
+function ProcessTeamDamage(int HealthDamageDealt, AOCPlayerController Victim, AOCPlayerController Attacker, optional AOCPawn VictimPawn, optional AOCPawn AttackerPawn)
 {
 
     local int TKPlayerIndex;
@@ -426,12 +425,12 @@ function ProcessTeamDamage(int HealthDamageDealt, AOCPlayerController Victim, AO
     if (Attacker.PlayerReplicationInfo.UniqueId == ZeroNetID)
         return;
 
-    if (!ArePlayersInTheSameTeam(Victim, Attacker))
+    if (!ArePlayersInTheSameTeam(Victim, Attacker, VictimPawn, AttackerPawn))
         return;
 
     `if(`isdefined(TKPMod_TO))
 
-        if (TKIgnoreKing && IsPlayerKing(Attacker)) // Only available for Team Objective mode.
+        if (TKIgnoreKing && IsPlayerKing(Attacker, AttackerPawn)) // Only available for Team Objective mode.
             return;
 
     `endif
@@ -451,7 +450,7 @@ protected function SetTK(int TKedPlayerIndex, UniqueNetId TKerID)
 
     TKPlayerInfo[TKedPlayerIndex].TKedBy = TKerID;
     // Time in which the player can punish or forgive his/her team killer. Dying for a second time or reaching this time will cause an auto-punish.
-    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = (WorldInfo.TimeSeconds + PunishTimeoutTime);
+    TKPlayerInfo[TKedPlayerIndex].PunishTimeout = (WorldInfo.TimeSeconds + DefaultPunishTimeout);
 
 }
 
@@ -833,8 +832,10 @@ Auto State AOCPreRound
 
 }
 
-function PerformOnFirstSpawn(Controller NewPlayer) // We want to create a TKInfo object for the player as soon as he performs his first spawn.
+function PerformOnFirstSpawn(Controller NewPlayer)
 {
+
+    /* We want to create a TKInfo object for the player as soon as he/she performs his/her first spawn. */
 
     local TKInfo TKPlayer;
 
@@ -860,6 +861,7 @@ function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cla
 
     local AOCPlayerController KillerPC, KilledPC;
     local int VictimPlayerIndex;
+    local AOCPawn KillerPawn;
 
     super.Killed(Killer, KilledPlayer, KilledPawn, damageType);
 
@@ -897,12 +899,14 @@ function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cla
     if (KillerPC == none)
         return;
 
-    if (ArePlayersInTheSameTeam(KillerPC, KilledPC))
+    KillerPawn = AOCPawn(KillerPC.Pawn);
+
+    if (ArePlayersInTheSameTeam(KilledPC, KillerPC, AOCPawn(KilledPawn), KillerPawn))
     {
 
         `if(`isdefined(TKPMod_TO))
 
-            if (TKIgnoreKing && IsPlayerKing(KillerPC)) // Only available for Team Objective mode.
+            if (TKIgnoreKing && IsPlayerKing(KillerPC, KillerPawn)) // Only available for Team Objective mode.
                 return;
 
         `endif
@@ -913,7 +917,7 @@ function Killed(Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cla
         if (GetPlayerIndexOnTKSystem(KillerPC.PlayerReplicationInfo.UniqueId) == INDEX_NONE)
             return;
 
-        BroadcastMessageToPlayer(KilledPC, "You've been teamkilled by"@Killer.PlayerReplicationInfo.PlayerName$". Type !p to punish or !f to forgive.");
+        BroadcastMessageToPlayer(KilledPC, "You've been teamkilled by"@KillerPC.PlayerReplicationInfo.PlayerName$". Type !p to punish or !f to forgive.");
         SetTK(VictimPlayerIndex, KillerPC.PlayerReplicationInfo.UniqueId);
 
     }
@@ -962,12 +966,12 @@ DefaultProperties
 
     PlayerControllerClass=class'`{GAMEMODE}PlayerController'
     DefaultPawnClass=class'`{GAMEMODE}Pawn'
-    PunishTimeoutTime = 20.f // 20 seconds for Punish Timeout base time.
+    DefaultPunishTimeout = 20.f // 20 seconds.
     WarningBoundaries[0] = 25; // 25%
     WarningBoundaries[1] = 50; // 50%
     WarningBoundaries[2] = 75; // 75%
-    FirstTKWarningColor = "#00FF00" // Green.
-    SecondTKWarningColor = "#FF9900" // Orange.
-    ThirdTKWarningColor = "#FF0000" // Red.
+    WarningColors[0] = "#00FF00" // Green. 
+    WarningColors[1] = "#FF9900" // Orange.
+    WarningColors[2] = "#FF0000" // Red.
 
 }
