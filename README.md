@@ -53,16 +53,16 @@ Team killer will be auto-punished when:
 **These are console commands.**
 
 * SaveTKValues -> Saves current TK-related values to the ini.
-* SetTKPointsPerDamage <new value> -> Sets a new integer value for TKPointsPerDamage.
-* SetTKPointsPerPunish <new value> -> Sets a new integer value for TKPointsPerPunish.
-* SetTKPointsPerAutoPunish <new value> -> Sets a new integer value for TKPointsPerAutoPunish.
-* SetTKPointsRemoveInterval <new value> -> Sets a new floating point value for TKPointsRemoveInterval.
-* SetTKPointsRemovedPerInterval <new value> -> Sets a new integer value for TKPointsRemovedPerInterval.
-* SetTKPointsMax <new value> -> Sets a new integer value for TKPointsMax.
-* SetTKBanDuration <new value> -> Sets a new floating point value for TKBanDuration.
-* SetTKIgnoreKing <True/False> -> Sets a new boolean value for TKIgnoreKing (only available for Team Objective).
-* GetTKValues <True/False> -> Shows the values for all TK system-related variables (console). The formatted string is in the same format used in the ini files. Optional argument tells whether it should copy to the clipboard or not.
-* GetTKPlayerInfo <True/False> -> Shows every player that has an entry in the TK system and still has his/her PlayerReplicationInfo object around (console). Format is "PlayerName <SteamID>: X TK Points", where SteamID is the SteamID's hexadecimal representation (int64/QWORD), and X is the amount of TK Points this player has. Optional argument tells whether it should copy to the clipboard or not.
+* SetTKPointsPerDamage [new value] -> Sets a new integer value for TKPointsPerDamage.
+* SetTKPointsPerPunish [new value] -> Sets a new integer value for TKPointsPerPunish.
+* SetTKPointsPerAutoPunish [new value] -> Sets a new integer value for TKPointsPerAutoPunish.
+* SetTKPointsRemoveInterval [new value] -> Sets a new floating point value for TKPointsRemoveInterval.
+* SetTKPointsRemovedPerInterval [new value] -> Sets a new integer value for TKPointsRemovedPerInterval.
+* SetTKPointsMax [new value] -> Sets a new integer value for TKPointsMax.
+* SetTKBanDuration [new value] -> Sets a new floating point value for TKBanDuration.
+* SetTKIgnoreKing [True/False] -> Sets a new boolean value for TKIgnoreKing (only available for Team Objective).
+* GetTKValues [True/False] -> Shows the values for all TK system-related variables (console). The formatted string is in the same format used in the ini files. Optional argument tells whether it should copy to the clipboard or not.
+* GetTKPlayerInfo [True/False] -> Shows every player that has an entry in the TK system and still has his/her PlayerReplicationInfo object around (console). Format is "PlayerName [SteamID]: X TK Points", where SteamID is the SteamID's hexadecimal representation (int64/QWORD), and X is the amount of TK Points this player has. Optional argument tells whether it should copy to the clipboard or not.
 
 ## Installing (Cooked) ##
 
@@ -77,7 +77,7 @@ For a server running through the dedicated server tool, instead of UDKGame/Cooke
 
 For a server running without the dedicated server tool, open My Documents/My Games/Chivalry Medieval Warfare Beta/UDKGame/Config/UDKGame.ini.  
 For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKGame.ini.  
-Replace every GameType="AOC.<GAMEMODE>" with GameType="TKPMod.<TKP GAMEMODE>" within every DefaultMapPrefixes.  
+Replace every GameType="AOC.[GAMEMODE]" with GameType="TKPMod.[TKP GAMEMODE]" within every DefaultMapPrefixes.  
 Example: Replace GameType="AOC.AOCTeamObjective" with GameType="TKPMod.TKPTO" for Team Objective.
 
 For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKEngine.ini.  
@@ -109,7 +109,7 @@ If you intend to compile and cook this project yourself, do the following:
 6. Open it with the editor: Binaries\Win64\UDK.exe editor
 7. Go to View -> World Properties.
 8. On Game Type set a supported game type to TKP[CTF/KOTH/LTS/TD/TO], save and close.
-9. Now cook: Binaries\Win64\UDK.exe CookPackages -log -nohomedir -platform=PC -SDKPackage=TKPMod <DummyMap> -multilanguagecook=int
+9. Now cook: Binaries\Win64\UDK.exe CookPackages -log -nohomedir -platform=PC -SDKPackage=TKPMod [DummyMap] -multilanguagecook=int
 10. Once cooked, go to UDKGame/CookedSDK/TKPMod and delete everything but TKPMod.u.
 11. It's now ready for deployment.
 
