@@ -14,7 +14,7 @@ If forgiven, he/she will not receive TK points for it.
 Once a player reaches the TK points limit, he/she will be kicked and banned.  
 Both limit and ban duration depend on the server configuration.  
 At every interval without team damaging, the player starts losing TK points.  
-Both interval and amount of points to be subtract depend on the server configuration.
+Both interval and amount of points to be subtracted depend on the server configuration.
 
 **NOTE:** Team damage and team kill done during the pre round and end game stages will not be counted.
 **NOTE:** This mod will not work on LAN servers as it depends on SteamID.
