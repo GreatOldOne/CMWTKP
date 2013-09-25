@@ -5,16 +5,16 @@ This mod brings an automated team killing and team damaging punishment system in
 
 ## Operation ##
 
-The system will create an entry for each player that spawns into a team-based game. This entry will be kept until the game ends, even if the player is no longer around.
-This entry will keep player-related information linked to his/her SteamID, such as TK points, team killer, etc.
-When a player damages a teammate, he/she will receive TK points for it. How many depends on the server configuration.
-When a player kills a teammate, he/she can be either punished or forgiven by his/her victim.
-If punished, he/she will receive TK points for it. How many depends on the server configuration.
-If forgiven, he/she will not receive TK points for it.
-Once a player reaches the TK points limit, he/she will be kicked and banned.
-Both limit and ban duration depend on the server configuration.
-At every interval without team damaging, the player starts losing TK points.
-Both interval and amount of points to be removed depend on the server configuration.
+The system will create an entry for each player that spawns into a team-based game. This entry will be kept until the game ends, even if the player is no longer around.  
+This entry will keep player-related information linked to his/her SteamID, such as TK points, team killer, etc.  
+When a player damages a teammate, he/she will receive TK points for it. How many depends on the server configuration.  
+When a player kills a teammate, he/she can be either punished or forgiven by his/her victim.  
+If punished, he/she will receive TK points for it. How many depends on the server configuration.  
+If forgiven, he/she will not receive TK points for it.  
+Once a player reaches the TK points limit, he/she will be kicked and banned.  
+Both limit and ban duration depend on the server configuration.  
+At every interval without team damaging, the player starts losing TK points.  
+Both interval and amount of points to be subtract depend on the server configuration.
 
 **NOTE:** Team damage and team kill done during the pre round and end game stages will not be counted.
 **NOTE:** This mod will not work on LAN servers as it depends on SteamID.
@@ -62,7 +62,7 @@ Team killer will be auto-punished when:
 * SetTKBanDuration <new value> -> Sets a new floating point value for TKBanDuration.
 * SetTKIgnoreKing <True/False> -> Sets a new boolean value for TKIgnoreKing (only available for Team Objective).
 * GetTKValues <True/False> -> Shows the values for all TK system-related variables (console). The formatted string is in the same format used in the ini files. Optional argument tells whether it should copy to the clipboard or not.
-* GetTKPlayerInfo <True/False> -> Shows every player that has an entry in the TK system and still have his/her PlayerReplicationInfo object around (console). Format is "PlayerName <SteamID>: X TK Points", where SteamID is the SteamID's hexadecimal representation (int64/QWORD), and X is the amount of TK Points this player has. Optional argument tells whether it should copy to the clipboard or not.
+* GetTKPlayerInfo <True/False> -> Shows every player that has an entry in the TK system and still has his/her PlayerReplicationInfo object around (console). Format is "PlayerName <SteamID>: X TK Points", where SteamID is the SteamID's hexadecimal representation (int64/QWORD), and X is the amount of TK Points this player has. Optional argument tells whether it should copy to the clipboard or not.
 
 ## Installing (Cooked) ##
 
@@ -72,18 +72,19 @@ Simply put TKPMod directory into UDKGame/CookedSDK.
 
 #### Server ####
 
-For a server running without the dedicated server tool, do the same as you did for the client.
+For a server running without the dedicated server tool, do the same as you did for the client.  
 For a server running through the dedicated server tool, instead of UDKGame/CookedSDK, put TKPMod directory into chivalry_ded_server/UDKGame/CookedPCServer.
 
-For a server running without the dedicated server tool, open My Documents/My Games/Chivalry Medieval Warfare Beta/UDKGame/Config/UDKGame.ini.
-For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKGame.ini.
-Replace every GameType="<GAMEMODE>" with GameType="TKPMod.<GAMEMODE>".
+For a server running without the dedicated server tool, open My Documents/My Games/Chivalry Medieval Warfare Beta/UDKGame/Config/UDKGame.ini.  
+For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKGame.ini.  
+Replace every GameType="AOC.<GAMEMODE>" with GameType="TKPMod.<TKP GAMEMODE>" within every DefaultMapPrefixes.  
 Example: Replace GameType="AOC.AOCTeamObjective" with GameType="TKPMod.TKPTO" for Team Objective.
 
-For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKEngine.ini.
+For a server running through the dedicated server tool, open chivalry_ded_server/UDKGame/Config/PCServer-UDKEngine.ini.  
 On [Engine.ScriptPackages] add NativePackages=TKPMod.
 
-Run the server for the first time to generate its configuration.
+Run the server with a map specific to the game mode you've replaced in the command line to generate its configuration.  
+Repeat this for each game mode that you've replaced.
 
 ###### Configuration Variables ######
 
@@ -92,7 +93,7 @@ Run the server for the first time to generate its configuration.
 * TKPointsPerAutoPunish = Value added to a team killer's TK points pool if his/her victim failed to forgive or punish.
 * TKPointsRemoveInterval = Time interval in which a player, whom have not dealt any new team damage, starts losing TK points. Value in seconds.
 * TKPointsRemovedPerInterval = Value subtracted from a player's TK points pool at every TKPointsRemoveInterval.
-* TKPointsMax = Maximum number of TK points a player can have. Reaching or trespassing this value will result in an auto kickban.
+* TKPointsMax = Maximum number of TK points a player can have. Reaching or trespassing this value will result in an auto kickban (logged admins are immune).
 * TKBanDuration = Duration of a ban caused by reaching or trespassing TKPointsMax. Value in seconds.
 * TKIgnoreKing = True/False - Defines whether the "King" player should be receiving TK points for team damage and team kill (only available for Team Objective).
 
@@ -114,8 +115,7 @@ If you intend to compile and cook this project yourself, do the following:
 
 ## Dependencies ##
 
-1. Chivalry: Medieval Warfare
-2. Chivalry: Medieval Warfare Beta
+1. Chivalry: Medieval Warfare Beta
 
 ## Contributing or using this code base ##
 
